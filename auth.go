@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	pkgerr "github.com/pkg/errors"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -24,37 +25,44 @@ func (s *server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		username, password, ok := r.BasicAuth()
 		if !ok {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			httpError(r.Context(), w, http.StatusUnauthorized, fmt.Errorf("unauthorized"))
 			return
 		}
 		stored, exists := allowedUsers[username]
 		if !exists {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			httpError(r.Context(), w, http.StatusUnauthorized, fmt.Errorf("unauthorized"))
 			return
 		}
-		ok, err := s.validatePassword(password, stored)
+		ok, err := s.validatePassword(r.Context(), password, stored)
 		if err != nil {
-			fmt.Printf("error validating password for user: %s, error: %v\n", username, err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			httpError(r.Context(), w, http.StatusInternalServerError, fmt.Errorf("internal server error: %w", err))
 			return
 		}
 		if !ok {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			httpError(r.Context(), w, http.StatusUnauthorized, fmt.Errorf("unauthorized"))
 			return
 		}
+
+		lc, ok := r.Context().Value(LogContextKey).(*LogContext)
+		if ok {
+			lc.Username = username
+		}
+
 		r = r.WithContext(context.WithValue(r.Context(), UserContextKey, username))
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (s *server) validatePassword(password, stored string) (bool, error) {
+func (s *server) validatePassword(ctx context.Context, password, stored string) (bool, error) {
+	_, span := tracer.Start(ctx, "auth.validate_password")
+	defer span.End()
+
 	err := bcrypt.CompareHashAndPassword([]byte(stored), []byte(password))
 	if err == bcrypt.ErrMismatchedHashAndPassword {
 		return false, nil
 	}
 	if err != nil {
-		fmt.Printf("error validating password: %v\n", err)
-		return false, err
+		return false, pkgerr.WithStack(err)
 	}
 	return true, nil
 }

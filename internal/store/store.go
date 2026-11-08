@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"boot.dev/linko/internal/linkoerr"
 )
 
 type ShortURL struct {
@@ -27,15 +29,17 @@ const (
 )
 
 type Store struct {
-	dir string
+	dir    string
+	logger *slog.Logger
 }
 
-func New(dir string) (*Store, error) {
+func New(dir string, logger *slog.Logger) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
 	return &Store{
-		dir: dir,
+		dir:    dir,
+		logger: logger,
 	}, nil
 }
 
@@ -68,16 +72,19 @@ func (s *Store) List(ctx context.Context) ([]ShortURL, error) {
 	ch := make(chan ShortURL)
 	go s.walk(ctx, ch)
 	var urls []ShortURL
+	var errs []error
+
 	for e := range ch {
 		if e.Err != nil {
-			return urls, e.Err
+			errs = append(errs, e.Err)
+			continue
 		}
 		urls = append(urls, e)
 		if len(urls) >= maxURLs {
 			break
 		}
 	}
-	return urls, nil
+	return urls, errors.Join(errs...)
 }
 
 func (s *Store) walk(ctx context.Context, ch chan<- ShortURL) {
@@ -90,7 +97,7 @@ func (s *Store) walk(ctx context.Context, ch chan<- ShortURL) {
 		if !e.IsDir() {
 			long, err := s.Lookup(ctx, e.Name())
 			if err != nil {
-				ch <- ShortURL{Err: fmt.Errorf("read %s: %w", filepath.Join(s.dir, e.Name()), err)}
+				ch <- ShortURL{Err: linkoerr.WithAttrs(err, "path", filepath.Join(s.dir, e.Name()))}
 				continue
 			}
 			ch <- ShortURL{ShortCode: e.Name(), LongURL: long}
@@ -103,11 +110,10 @@ func (s *Store) Lookup(_ context.Context, short string) (string, error) {
 	shortcodeFilepath := filepath.Join(s.dir, short)
 	data, err := os.ReadFile(shortcodeFilepath)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", ErrNotFound
+		return "", linkoerr.WithAttrs(ErrNotFound, "path", shortcodeFilepath)
 	}
 	if err != nil {
-		fmt.Printf("failed to read %s: %v\n", shortcodeFilepath, err)
-		return "", err
+		return "", linkoerr.WithAttrs(err, "path", shortcodeFilepath)
 	}
 	return string(data), nil
 }

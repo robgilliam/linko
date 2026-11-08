@@ -26,64 +26,73 @@ var (
 var indexPage string
 
 func (s *server) handlerIndex(w http.ResponseWriter, r *http.Request) {
+	_, span := tracer.Start(r.Context(), "handler.index")
+	defer span.End()
+
 	w.Header().Set("Content-Type", "text/html")
 	io.WriteString(w, indexPage)
 }
 
 func (s *server) handlerLogin(w http.ResponseWriter, r *http.Request) {
+	_, span := tracer.Start(r.Context(), "handler.login")
+	defer span.End()
+
 	w.WriteHeader(http.StatusOK)
 }
 
+
 func (s *server) handlerShortenLink(w http.ResponseWriter, r *http.Request) {
-	user, ok := r.Context().Value(UserContextKey).(string)
+	ctx, span := tracer.Start(r.Context(), "handler.shorten_link")
+	defer span.End()
+
+	user, ok := ctx.Value(UserContextKey).(string)
 	if !ok || user == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		httpError(ctx, w, http.StatusUnauthorized, errors.New("unauthorized"))
 		return
 	}
 	longURL := r.FormValue("url")
 	if longURL == "" {
-		http.Error(w, "missing url parameter", http.StatusBadRequest)
+		httpError(ctx, w, http.StatusBadRequest, errors.New("missing url parameter"))
 		return
 	}
-	fmt.Println("Shortening URL:", longURL)
 	u, err := url.Parse(longURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		http.Error(w, "invalid URL: must include scheme (http/https) and host", http.StatusBadRequest)
+		httpError(ctx, w, http.StatusBadRequest, errors.New("invalid URL: must include scheme (http/https) and host"))
 		return
 	}
-	fmt.Printf("Parsed URL: scheme=%s, host=%s\n", u.Scheme, u.Host)
-	if err := checkDestination(longURL); err != nil {
-		http.Error(w, fmt.Sprintf("invalid target URL: %v", err), http.StatusBadRequest)
+	if err := checkDestination(ctx, longURL); err != nil {
+		httpError(ctx, w, http.StatusBadRequest, fmt.Errorf("invalid target URL: %v", err))
 		return
 	}
 	shortCode, err := s.store.Create(r.Context(), longURL)
 	if err != nil {
-		http.Error(w, "failed to shorten URL", http.StatusInternalServerError)
+		httpError(ctx, w, http.StatusInternalServerError, fmt.Errorf("failed to shorten URL: %w", err))
 		return
 	}
-	fmt.Printf("Generated short code: %s for URL: %s\n", shortCode, longURL)
+	s.logger.Info("Successfully generated short code", "long_url", longURL, "short_code", shortCode)
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusCreated)
 	io.WriteString(w, shortCode)
 }
 
 func (s *server) handlerRedirect(w http.ResponseWriter, r *http.Request) {
-	longURL, err := s.store.Lookup(r.Context(), r.PathValue("shortCode"))
+	ctx, span := tracer.Start(r.Context(), "handler.redirect")
+	defer span.End()
+
+	longURL, err := s.store.Lookup(ctx, r.PathValue("shortCode"))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
+			httpError(ctx, w, http.StatusNotFound, errors.New("not found"))
 		} else {
-			fmt.Printf("failed to lookup URL: %v\n", err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
+			httpError(ctx, w, http.StatusInternalServerError, fmt.Errorf("internal server error: %w", err))
 		}
 		return
 	}
 	_, _ = bcrypt.GenerateFromPassword([]byte(longURL), bcrypt.DefaultCost)
-	if err := checkDestination(longURL); err != nil {
-		http.Error(w, "destination unavailable", http.StatusBadGateway)
+	if err := checkDestination(ctx, longURL); err != nil {
+		httpError(ctx, w, http.StatusBadGateway, errors.New("destination unavailable"))
 		return
 	}
-
 	redirectsMu.Lock()
 	redirects = append(redirects, strings.Repeat(longURL, 1024))
 	redirectsMu.Unlock()
@@ -92,10 +101,12 @@ func (s *server) handlerRedirect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handlerListURLs(w http.ResponseWriter, r *http.Request) {
+	ctx, span := tracer.Start(r.Context(), "handler.list_urls")
+	defer span.End()
+
 	codes, err := s.store.List(r.Context())
 	if err != nil {
-		fmt.Printf("failed to list URLs: %v\n", err)
-		http.Error(w, "failed to list URLs", http.StatusInternalServerError)
+		httpError(ctx, w, http.StatusInternalServerError, fmt.Errorf("failed to list URLs: %w", err))
 		return
 	}
 
@@ -103,7 +114,10 @@ func (s *server) handlerListURLs(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(codes)
 }
 
-func (s *server) handlerStats(w http.ResponseWriter, _ *http.Request) {
+func (s *server) handlerStats(w http.ResponseWriter, r *http.Request) {
+	_, span := tracer.Start(r.Context(), "handler.stats")
+	defer span.End()
+
 	redirectsMu.Lock()
 	snapshot := redirects
 	redirectsMu.Unlock()

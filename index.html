@@ -10,7 +10,7 @@
         max-width: 600px;
         margin: 40px auto;
         padding: 0 20px;
-        min-height: calc(100vh - 80px);
+        min-height: 100vh;
         box-sizing: border-box;
         display: flex;
         flex-direction: column;
@@ -59,9 +59,21 @@
       section {
         margin-bottom: 20px;
       }
-      main { flex: 1; }
-      footer { margin-top: auto; padding: 12px 0; text-align: center; color: #0a0; font-size: 0.75rem; opacity: 0.7; }
-      footer a { color: inherit; font-weight: normal; }
+      main {
+        flex: 1;
+      }
+      footer {
+        margin-top: auto;
+        padding: 12px 0;
+        text-align: center;
+        color: #0a0;
+        font-size: 0.75rem;
+        opacity: 0.7;
+      }
+      footer a {
+        color: inherit;
+        font-weight: normal;
+      }
       #shorten-section {
         display: none;
       }
@@ -161,7 +173,13 @@
         </table>
       </section>
     </main>
-        <footer>Made in a <a href="https://www.boot.dev" target="_blank" rel="noopener noreferrer">Boot.dev</a> course</footer>
+    <footer>
+      Made in a
+      <a href="https://www.boot.dev" target="_blank" rel="noopener noreferrer"
+        >Boot.dev</a
+      >
+      course
+    </footer>
 
     <script>
       let authHeader = null;
